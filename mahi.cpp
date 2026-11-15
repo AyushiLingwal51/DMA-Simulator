@@ -400,3 +400,224 @@ class MemorySimulator {
         }
     }
 };
+int main() {
+
+    // The pool size is selected by the user in the frontend.
+    MemorySimulator* memory = new MemorySimulator(2048);
+
+    httplib::Server server;
+
+    // Objects used through the common MemoryOperation parent class.
+    MallocOperation mallocOperation;
+    CallocOperation callocOperation;
+    FreeOperation freeOperation;
+
+    // CORS
+    auto cors = [](httplib::Response& res) {
+
+        res.set_header("Access-Control-Allow-Origin", "*");
+
+        res.set_header("Access-Control-Allow-Methods",
+                       "GET, POST, OPTIONS");
+
+        res.set_header("Access-Control-Allow-Headers",
+                       "Content-Type");
+    };
+
+
+    // OPTIONS API
+    server.Options(R"(/.*)", [&](const httplib::Request&,
+                                 httplib::Response& res) {
+
+        cors(res);
+
+        res.status = 204;
+    });
+
+
+    // RESET API: create a fresh memory pool with the requested size.
+    server.Post("/reset", [&](const httplib::Request& req,
+                               httplib::Response& res) {
+
+        cors(res);
+
+        int newSize = getNumber(req.body, "size");
+
+        if (newSize < 1 || newSize > 102400) {
+            res.status = 400;
+            res.set_content(
+                "{\"success\":false,\"message\":\"Pool size must be between 1 and 102400 bytes\"}",
+                "application/json"
+            );
+            return;
+        }
+
+        // Delete the old linked list and initialize a new pool.
+        delete memory;
+        memory = new MemorySimulator(newSize);
+
+        res.set_content(
+            "{\"success\":true,\"total\":" + to_string(newSize) +
+            ",\"memory\":" + memory->getMemory() + "}",
+            "application/json"
+        );
+    });
+
+
+    // ALLOCATION API
+    server.Post("/allocate", [&](const httplib::Request& req,
+                                 httplib::Response& res) {
+
+        cors(res);
+
+        int size = getNumber(req.body, "size");
+
+        string strategy = getString(req.body, "strategy");
+
+        string type = getString(req.body, "type");
+
+        if (strategy != "first" &&
+            strategy != "best" &&
+            strategy != "worst") {
+
+            res.status = 400;
+
+            res.set_content(
+                "{\"error\":\"Invalid strategy\"}",
+                "application/json"
+            );
+
+            return;
+        }
+
+        if (type != "malloc" && type != "calloc") {
+
+            res.status = 400;
+
+            res.set_content(
+                "{\"error\":\"Invalid allocation type\"}",
+                "application/json"
+            );
+
+            return;
+        }
+
+        // Runtime polymorphism: choose the correct child operation.
+        const MemoryOperation* operation;
+        if (type == "malloc")
+            operation = &mallocOperation;
+        else
+            operation = &callocOperation;
+
+        int id = operation->execute(*memory, size, strategy);
+
+        if (id == -1) {
+
+            res.set_content(
+                "{\"success\":false,\"message\":\"Allocation failed\"}",
+                "application/json"
+            );
+
+            return;
+        }
+
+        string response =
+            "{\"success\":true,\"id\":" +
+            to_string(id) +
+            ",\"memory\":" +
+            memory->getMemory() + "}";
+
+        res.set_content(response, "application/json");
+    });
+
+
+    // REALLOCATION API
+    server.Post("/realloc", [&](const httplib::Request& req,
+                                httplib::Response& res) {
+
+        cors(res);
+
+        int id = getNumber(req.body, "id");
+
+        int size = getNumber(req.body, "size");
+
+        int newId = memory->reallocate(id, size);
+
+        if (newId == -1) {
+
+            res.set_content(
+                "{\"success\":false,\"message\":\"Reallocation failed\"}",
+                "application/json"
+            );
+
+            return;
+        }
+
+        string response =
+            "{\"success\":true,\"id\":" +
+            to_string(newId) +
+            ",\"memory\":" +
+            memory->getMemory() + "}";
+
+        res.set_content(response, "application/json");
+    });
+
+
+    // FREE API
+    server.Post("/free", [&](const httplib::Request& req,
+                             httplib::Response& res) {
+
+        cors(res);
+
+        int id = getNumber(req.body, "id");
+
+        // The FreeOperation object performs the release.
+        bool success = freeOperation.execute(*memory, id, "") != -1;
+
+        string response =
+            success ?
+            "{\"success\":true,\"memory\":" +
+            memory->getMemory() + "}" :
+            "{\"success\":false,\"message\":\"Invalid ID\"}";
+
+        res.set_content(response, "application/json");
+    });
+
+
+    // DISPLAY MEMORY API
+    server.Get("/memory", [&](const httplib::Request&,
+                              httplib::Response& res) {
+
+        cors(res);
+
+        res.set_content(
+            memory->getMemory(),
+            "application/json"
+        );
+    });
+
+
+    // STATISTICS API
+    server.Get("/stats", [&](const httplib::Request&,
+                             httplib::Response& res) {
+
+        cors(res);
+
+        res.set_content(
+            memory->getStats(),
+            "application/json"
+        );
+    });
+
+
+    // Serve index.html, app.js and style.css from the frontend folder.
+    server.set_mount_point("/", "./frontend");
+
+    cout << "\nDMA Simulator Started!" << endl;
+    cout << "Open: http://localhost:8080" << endl;
+
+    server.listen("127.0.0.1", 8080);
+
+    delete memory;
+    return 0;
+}
