@@ -38,7 +38,7 @@ class MemorySimulator {
 
     public:
 
-    // Start with one large free block covering the whole memory pool.
+    
     MemorySimulator(int size) {
         totalSize = size;
         nextId = 1;
